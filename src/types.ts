@@ -1,0 +1,26 @@
+export interface Article {
+  title: string;
+  description: string;
+  url: string;
+  source: string;
+  publishedAt: string;
+}
+
+export interface DigestStory {
+  title: string;
+  summary: string;
+  source: string;
+  url: string;
+  category: string;
+  importance: number;
+}
+
+export interface PlannedEvent extends DigestStory {
+  eventDate: string;
+}
+
+export interface Digest {
+  date: string;
+  yesterday: DigestStory[];
+  today: PlannedEvent[];
+}

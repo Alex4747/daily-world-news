@@ -1,0 +1,52 @@
+name: Daily world news digest
+
+on:
+  schedule:
+    - cron: "0 9 * * *"
+      timezone: Europe/Kyiv
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Подготовить дайджест без отправки в Telegram"
+        type: boolean
+        required: true
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-world-news-digest
+  cancel-in-progress: false
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - name: Prepare digest without sending (manual dry run)
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        run: npm start
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-2.5-flash-lite
+          TIMEZONE: Europe/Kyiv
+          DRY_RUN: "true"
+      - name: Send digest (schedule or manual live run)
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+        run: npm start
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GEMINI_MODEL: gemini-2.5-flash-lite
+          TIMEZONE: Europe/Kyiv
+          DRY_RUN: "false"
