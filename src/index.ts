@@ -4,10 +4,14 @@ import { formatDigest } from "./format.js";
 import { deduplicateArticles, fetchRssFeeds } from "./rss.js";
 import { sendTelegram } from "./telegram.js";
 import { selectDigestArticles } from "./selection.js";
+import { isDryRun, missingSecrets } from "./runtime.js";
 
 async function main() {
   const now = new Date();
   const timezone = process.env.TIMEZONE || "Europe/Kyiv";
+  const dryRun = isDryRun();
+  const missing = missingSecrets(dryRun);
+  if (missing.length) throw new Error(`Missing required GitHub Actions/local secrets: ${missing.join(", ")}.`);
   const today = localDate(now, timezone);
   const yesterday = previousDate(now, timezone);
   const articles = deduplicateArticles(await fetchRssFeeds());
@@ -16,7 +20,7 @@ async function main() {
   const digest = await createDigest(input, yesterday, today, process.env.GEMINI_API_KEY || "", process.env.GEMINI_MODEL);
   const messages = formatDigest(digest);
   if (!messages.length) throw new Error("Digest has no stories; refusing to send an empty digest.");
-  if (process.env.DRY_RUN === "true") {
+  if (dryRun) {
     console.log(JSON.stringify({ mode: "dry-run", date: today, messages }, null, 2));
     return;
   }
