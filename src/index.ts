@@ -22,7 +22,8 @@ async function main() {
   const articles = deduplicateArticles(fetched);
   console.log(`RSS total: ${fetched.length} articles from ${feedStatuses.filter((status) => status.ok).length}/${feedStatuses.length} feeds; ${articles.length} after URL deduplication.`);
   const input = selectDigestArticles(articles, yesterday, today, timezone);
-  console.log(`Eligible candidate articles sent to Gemini: ${input.length}.`);
+  const yesterdayCandidates = input.filter((article) => localDate(new Date(article.publishedAt), timezone) === yesterday).length;
+  console.log(`Eligible candidate articles sent to Gemini: ${input.length} (${yesterdayCandidates} yesterday; ${input.length - yesterdayCandidates} event candidates).`);
   if (!input.length) {
     if (dryRun) {
       console.log(JSON.stringify({ mode: "dry-run", date: today, candidates: 0, result: "no-eligible-articles" }));

@@ -67,7 +67,7 @@ export async function createDigest(
   client?: Pick<GoogleGenAI["models"], "generateContent">,
 ): Promise<Digest> {
   if (!apiKey) throw new Error("GEMINI_API_KEY is required.");
-  const models = client ?? new GoogleGenAI({ apiKey }).models;
+  const models = client ?? new GoogleGenAI({ apiKey, httpOptions: { retryOptions: { attempts: 5 } } }).models;
   const input = articles.map((a, i) => ({ articleIndex: i, ...a }));
   const prompt = `Prepare a concise Russian world news digest. Use ONLY the supplied articles. Never invent facts, dates, or URLs.\nYesterday section: include only stories whose publication date is exactly ${yesterdayDate} in Europe/Kyiv; return at most 10 most globally significant stories across politics, economy, technology/AI, science, international relations, and society.\nToday's scheduled events section for ${todayDate}: include ONLY events explicitly described in supplied article text as planned for exactly ${todayDate}; the text must state a verifiable event date. Do not include predictions or routine schedules. If none are clearly confirmed, return an empty array. At most 10.\nFor each item return articleIndex from input, fluent Russian headline and a faithful one-sentence Russian summary, category, and integer importance 1..10. Include eventDate YYYY-MM-DD for today events. Return strict JSON matching {"yesterday":[...],"today":[...]}.\nArticles: ${JSON.stringify(input)}`;
   const response = await models.generateContent({
