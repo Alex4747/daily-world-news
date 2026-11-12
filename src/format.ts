@@ -24,7 +24,7 @@ export function formatDigest(digest: Digest): string[] {
   } else blocks.push("<b>ТОП-10 ЗА ВЧЕРА</b>\nНадёжных новостей за указанную дату не найдено.");
   if (digest.today.length) {
     blocks.push("<b>СЕГОДНЯ · ПОДТВЕРЖДЁННЫЕ СОБЫТИЯ</b>");
-    blocks.push(...digest.today.slice(0, 10).map((story: PlannedEvent, i) => `${storyText(story, i + 1)}\n<i>Дата события: ${escapeHtml(story.eventDate)}</i>`));
+    blocks.push(...digest.today.slice(0, 10).map((story: PlannedEvent, i) => `${storyText(story, i + 1)}\n<i>Дата: ${escapeHtml(story.eventDate)}${story.eventTime ? ` · ${escapeHtml(story.eventTime)}` : ""} · ${escapeHtml(story.timeZone)} · подтверждено первоисточником</i>`));
   } else blocks.push("<b>СЕГОДНЯ · ПОДТВЕРЖДЁННЫЕ СОБЫТИЯ</b>\nВ предоставленных источниках нет достаточно подтверждённых событий на сегодня.");
   return splitMessages(blocks.join("\n\n"));
 }

@@ -17,6 +17,9 @@ export interface DigestStory {
 
 export interface PlannedEvent extends DigestStory {
   eventDate: string;
+  eventTime: string | null;
+  timeZone: string;
+  confirmation: "confirmed";
 }
 
 export interface Digest {

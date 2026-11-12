@@ -3,28 +3,31 @@ import assert from "node:assert/strict";
 import { buildDigestFromOutput, createDigest } from "../src/gemini.js";
 import type { GoogleGenAI } from "@google/genai";
 import type { Article } from "../src/types.js";
+import type { CalendarEvent } from "../src/events.js";
 
 test("uses Russian model output, keeps original source and link, and rejects wrong dates", () => {
   const articles: Article[] = [
     { title: "Original title", description: "Conference planned for 2026-11-11", url: "https://example.com/one", source: "BBC News", publishedAt: "2026-11-10T20:30:00Z" },
     { title: "Older story", description: "", url: "https://example.com/two", source: "Reuters", publishedAt: "2026-11-09T12:00:00Z" },
   ];
+  const events: CalendarEvent[] = [{ id: "ev1", title: "International conference", category: "Технологии", date: "2026-11-11", time: null, timeZone: "Europe/Paris", description: "Officially scheduled.", url: "https://example.com/calendar", source: "Organizer", confirmation: "confirmed" }];
   const digest = buildDigestFromOutput(articles, {
     yesterday: [
       { articleIndex: 0, title: "Переведённый заголовок", summary: "Краткое описание.", category: "Наука", importance: 8 },
       { articleIndex: 1, title: "Старая новость", summary: "Старое описание.", category: "Мир", importance: 10 },
     ],
     today: [
-      { articleIndex: 0, title: "Подтверждённая конференция", summary: "Событие запланировано.", category: "Наука", importance: 7, eventDate: "2026-11-11" },
-      { articleIndex: 1, title: "Неподтверждённое событие", summary: "Дата не в исходнике.", category: "Мир", importance: 9, eventDate: "2026-11-11" },
+      { eventIndex: 0, title: "Подтверждённая конференция", summary: "Событие запланировано.", category: "Наука", importance: 7 },
+      { eventIndex: 1, title: "Неподтверждённое событие", summary: "Нет в календаре.", category: "Мир", importance: 9 },
     ],
-  }, "2026-11-10", "2026-11-11");
+  }, "2026-11-10", "2026-11-11", "Europe/Kyiv", events);
   assert.equal(digest.yesterday.length, 1);
   assert.equal(digest.yesterday[0].title, "Переведённый заголовок");
   assert.equal(digest.yesterday[0].source, "BBC News");
   assert.equal(digest.yesterday[0].url, articles[0].url);
   assert.equal(digest.today.length, 1);
   assert.equal(digest.today[0].eventDate, "2026-11-11");
+  assert.equal(digest.today[0].url, events[0].url);
 });
 
 test("Gemini SDK request uses JSON mode and preserves the source article reference", async () => {
@@ -41,7 +44,7 @@ test("Gemini SDK request uses JSON mode and preserves the source article referen
   assert.equal(request?.config?.responseMimeType, "application/json");
   assert.deepEqual((request?.config?.responseSchema as { required?: string[] })?.required, ["yesterday", "today"]);
   assert.match(String(request?.contents), /https:\/\/example\.com\/election/);
-  assert.match(String(request?.contents), /If at least one such article is supplied, return at least one story/);
+  assert.match(String(request?.contents), /official calendar events/i);
   assert.equal(digest.yesterday[0].url, article.url);
 });
 

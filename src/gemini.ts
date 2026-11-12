@@ -1,10 +1,11 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { localDate } from "./dates.js";
 import type { Article, Digest } from "./types.js";
+import type { CalendarEvent } from "./events.js";
 
 interface GeminiOutput {
   yesterday: Array<{ articleIndex: number; title: string; summary: string; category: string; importance: number }>;
-  today: Array<{ articleIndex: number; title: string; summary: string; category: string; importance: number; eventDate: string }>;
+  today: Array<{ eventIndex: number; title: string; summary: string; category: string; importance: number }>;
 }
 
 function uniqueStories<T extends { title: string; importance: number }>(stories: T[]): T[] {
@@ -23,17 +24,15 @@ function uniqueStories<T extends { title: string; importance: number }>(stories:
   return chosen;
 }
 
-export function buildDigestFromOutput(articles: Article[], result: GeminiOutput, yesterdayDate: string, todayDate: string, timeZone = "Europe/Kyiv"): Digest {
-  const story = (item: GeminiOutput["yesterday"][number]) => {
-    if (!Number.isInteger(item.articleIndex) || !Number.isFinite(item.importance)) return null;
-    const article = articles[item.articleIndex];
-    if (!article || typeof item.title !== "string" || typeof item.summary !== "string" || !item.title.trim() || !item.summary.trim()) return null;
+export function buildDigestFromOutput(articles: Article[], result: GeminiOutput, yesterdayDate: string, todayDate: string, timeZone = "Europe/Kyiv", events: CalendarEvent[] = []): Digest {
+  const translatedText = (item: { title: string; summary: string; category: string; importance: number }) => {
+    if (!Number.isFinite(item.importance) || typeof item.title !== "string" || typeof item.summary !== "string" || !item.title.trim() || !item.summary.trim()) return null;
     const title = item.title.replace(/\s+/g, " ").trim().slice(0, 240);
     const summary = item.summary.replace(/\s+/g, " ").trim().slice(0, 700);
     if (!title || !summary) return null;
     return {
       title, summary, category: typeof item.category === "string" ? item.category.replace(/\s+/g, " ").trim().slice(0, 60) || "Мир" : "Мир",
-      importance: Math.max(1, Math.min(10, Math.round(item.importance))), source: article.source, url: article.url,
+      importance: Math.max(1, Math.min(10, Math.round(item.importance))),
     };
   };
   const yesterdaySeen = new Set<number>();
@@ -41,21 +40,21 @@ export function buildDigestFromOutput(articles: Article[], result: GeminiOutput,
     if (!item || typeof item !== "object") return [];
     if (yesterdaySeen.has(item.articleIndex)) return [];
     const source = articles[item.articleIndex];
-    const translated = story(item);
+    const translated = translatedText(item);
     if (!source || !translated || localDate(new Date(source.publishedAt), timeZone) !== yesterdayDate) return [];
     yesterdaySeen.add(item.articleIndex);
-    return [translated];
+    return [{ ...translated, source: source.source, url: source.url }];
   });
   const uniqueYesterday = uniqueStories(yesterday).slice(0, 10);
   const todaySeen = new Set<number>();
   const today = (Array.isArray(result.today) ? result.today : []).flatMap((item) => {
     if (!item || typeof item !== "object") return [];
-    if (todaySeen.has(item.articleIndex)) return [];
-    const source = articles[item.articleIndex];
-    const translated = story(item);
-    if (!source || !translated || item.eventDate !== todayDate || !`${source.title} ${source.description}`.includes(todayDate)) return [];
-    todaySeen.add(item.articleIndex);
-    return [{ ...translated, eventDate: todayDate }];
+    if (!Number.isInteger(item.eventIndex) || todaySeen.has(item.eventIndex)) return [];
+    const source = events[item.eventIndex];
+    const translated = translatedText(item);
+    if (!source || !translated || source.date !== todayDate || source.confirmation !== "confirmed") return [];
+    todaySeen.add(item.eventIndex);
+    return [{ ...translated, category: source.category, source: source.source, url: source.url, eventDate: source.date, eventTime: source.time, timeZone: source.timeZone, confirmation: source.confirmation }];
   });
   const uniqueToday = uniqueStories(today).slice(0, 10);
   return { date: todayDate, yesterday: uniqueYesterday, today: uniqueToday };
@@ -65,10 +64,12 @@ export async function createDigest(
   articles: Article[], yesterdayDate: string, todayDate: string, apiKey: string,
   model = "gemini-3.5-flash-lite", timeZone = "Europe/Kyiv",
   client?: Pick<GoogleGenAI["models"], "generateContent">,
+  events: CalendarEvent[] = [],
 ): Promise<Digest> {
   if (!apiKey) throw new Error("GEMINI_API_KEY is required.");
   const models = client ?? new GoogleGenAI({ apiKey, httpOptions: { retryOptions: { attempts: 5 } } }).models;
   const input = articles.map((a, i) => ({ articleIndex: i, ...a }));
+  const eventInput = events.map((event, eventIndex) => ({ eventIndex, ...event }));
   const yesterdayStorySchema = {
     type: Type.OBJECT,
     properties: {
@@ -80,12 +81,12 @@ export async function createDigest(
   const todayEventSchema = {
     type: Type.OBJECT,
     properties: {
-      ...yesterdayStorySchema.properties,
-      eventDate: { type: Type.STRING, format: "date" },
+      eventIndex: { type: Type.INTEGER }, title: { type: Type.STRING }, summary: { type: Type.STRING },
+      category: { type: Type.STRING }, importance: { type: Type.INTEGER, minimum: 1, maximum: 10 },
     },
-    required: [...yesterdayStorySchema.required, "eventDate"],
+    required: ["eventIndex", "title", "summary", "category", "importance"],
   };
-  const prompt = `Prepare a concise Russian world news digest. Use ONLY the supplied articles. Never invent facts, dates, or URLs.\nYesterday section: the input was prefiltered for articles whose publication date is exactly ${yesterdayDate} in Europe/Kyiv. Rank those articles by global importance across politics, economy, technology/AI, science, international relations, and society, then return up to 10. If at least one such article is supplied, return at least one story; do not return an empty yesterday array merely because an article is less prominent than others.\nToday's scheduled events section for ${todayDate}: include ONLY events explicitly described in supplied article text as planned for exactly ${todayDate}; the text must state a verifiable event date. Do not include predictions or routine schedules. If none are clearly confirmed, return an empty array. At most 10.\nFor each item return articleIndex from input, fluent Russian headline and a faithful one-sentence Russian summary, category, and integer importance 1..10. Include eventDate YYYY-MM-DD for today events. Return strict JSON matching {"yesterday":[...],"today":[...]}.\nArticles: ${JSON.stringify(input)}`;
+  const prompt = `Prepare a concise Russian world news digest. Use only the supplied records; never invent stories, events, facts, dates, times, confirmation, or URLs.\nYesterday section: articles are prefiltered to publication date ${yesterdayDate} in ${timeZone}. Rank by global importance and return up to 10, preserving articleIndex.\nToday's events section: these events were independently obtained from official calendars and prefiltered to ${todayDate} in ${timeZone}. Choose up to 10 most significant. Return only eventIndex values present in the supplied list; do not add, merge, or infer events. Translate title and description into Russian, preserving meaning. Return category and importance 1..10. The event date/time/timezone/source URL/confirmation are fixed by the supplied event record and will be attached by the application.\nReturn strict JSON matching {"yesterday":[...],"today":[...]}.\nArticles: ${JSON.stringify(input)}\nOfficial calendar events: ${JSON.stringify(eventInput)}`;
   const response = await models.generateContent({
     model,
     contents: prompt,
@@ -113,7 +114,7 @@ export async function createDigest(
     result = parsed as GeminiOutput;
   }
   catch { throw new Error("Gemini returned invalid JSON."); }
-  const digest = buildDigestFromOutput(articles, result, yesterdayDate, todayDate, timeZone);
+  const digest = buildDigestFromOutput(articles, result, yesterdayDate, todayDate, timeZone, events);
   console.log(`Gemini selection: ${result.yesterday.length} raw yesterday items/${digest.yesterday.length} accepted; ${result.today.length} raw today events/${digest.today.length} accepted.`);
   return digest;
 }

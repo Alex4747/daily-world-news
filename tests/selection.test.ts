@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { selectDigestArticles } from "../src/selection.js";
 import type { Article } from "../src/types.js";
 
-test("includes yesterday's stories and recent explicitly dated event announcements", () => {
+test("selects only yesterday's stories; RSS event announcements are no longer event candidates", () => {
   const articles: Article[] = [
     { title: "Yesterday story", description: "News", url: "https://example.com/yesterday", source: "BBC", publishedAt: "2026-11-10T12:00:00Z" },
     { title: "Summit scheduled for 2026-11-11", description: "Leaders will meet on 2026-11-11", url: "https://example.com/summit", source: "NPR", publishedAt: "2026-10-20T10:00:00Z" },
@@ -13,6 +13,5 @@ test("includes yesterday's stories and recent explicitly dated event announcemen
   const selected = selectDigestArticles(articles, "2026-11-10", "2026-11-11");
   assert.deepEqual(selected.map((article) => article.url), [
     "https://example.com/yesterday",
-    "https://example.com/summit",
   ]);
 });
