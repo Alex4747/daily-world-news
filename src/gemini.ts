@@ -86,7 +86,8 @@ export async function createDigest(
     },
     required: ["eventIndex", "title", "summary", "category", "importance"],
   };
-  const prompt = `Prepare a concise Russian world news digest. Use only the supplied records; never invent stories, events, facts, dates, times, confirmation, or URLs.\nYesterday section: articles are prefiltered to publication date ${yesterdayDate} in ${timeZone}. Rank by global importance and return up to 10, preserving articleIndex.\nToday's events section: these events were independently obtained from official calendars and prefiltered to ${todayDate} in ${timeZone}. Choose up to 10 most significant. Return only eventIndex values present in the supplied list; do not add, merge, or infer events. Translate title and description into Russian, preserving meaning. Return category and importance 1..10. The event date/time/timezone/source URL/confirmation are fixed by the supplied event record and will be attached by the application.\nReturn strict JSON matching {"yesterday":[...],"today":[...]}.\nArticles: ${JSON.stringify(input)}\nOfficial calendar events: ${JSON.stringify(eventInput)}`;
+  const requestedNews = Math.min(10, input.length);
+  const prompt = `Prepare a concise Russian world news digest. Use only the supplied records; never invent stories, events, facts, dates, times, confirmation, or URLs.\nYesterday section: articles are prefiltered to publication date ${yesterdayDate} in ${timeZone}. Select exactly ${requestedNews} distinct, globally important stories when that many non-duplicate candidates are available; otherwise return every qualifying distinct story. Do not stop at five. Preserve articleIndex and use a different index for each story.\nToday's events section: these events were independently obtained from official calendars and prefiltered to ${todayDate} in ${timeZone}. Choose up to 10 most significant. Return only eventIndex values present in the supplied list; do not add, merge, or infer events. Translate title and description into Russian, preserving meaning. Return category and importance 1..10. The event date/time/timezone/source URL/confirmation are fixed by the supplied event record and will be attached by the application.\nReturn strict JSON matching {"yesterday":[...],"today":[...]}.\nArticles: ${JSON.stringify(input)}\nOfficial calendar events: ${JSON.stringify(eventInput)}`;
   const response = await models.generateContent({
     model,
     contents: prompt,
@@ -96,7 +97,7 @@ export async function createDigest(
       responseSchema: {
         type: Type.OBJECT,
         properties: {
-          yesterday: { type: Type.ARRAY, maxItems: "10", items: yesterdayStorySchema },
+          yesterday: { type: Type.ARRAY, minItems: String(requestedNews), maxItems: "10", items: yesterdayStorySchema },
           today: { type: Type.ARRAY, maxItems: "10", items: todayEventSchema },
         },
         required: ["yesterday", "today"],

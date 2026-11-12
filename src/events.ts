@@ -6,6 +6,8 @@ export interface CalendarEvent {
   title: string;
   category: EventCategory;
   date: string;
+  endDate?: string;
+  endTime?: string | null;
   time: string | null;
   timeZone: string;
   description: string;
@@ -95,10 +97,27 @@ export function parseIcsEvents(ics: string, options: { category: EventCategory; 
     if (line === "BEGIN:VEVENT") { item = {}; continue; }
     if (line === "END:VEVENT" && item) {
       const rawStart = item.DTSTART ?? "";
-      const date = dateOnly(rawStart.length === 8 ? `${rawStart.slice(0, 4)}-${rawStart.slice(4, 6)}-${rawStart.slice(6, 8)}` : rawStart);
+      const rawEnd = item.DTEND ?? "";
+      const startZone = item["DTSTART;TZID"] ?? (rawStart.endsWith("Z") ? "UTC" : options.timeZone);
+      const utcStart = rawStart.endsWith("Z") && rawStart.includes("T") ? parseIcsInstant(rawStart) : null;
+      const date = utcStart
+        ? localDate(utcStart, options.timeZone)
+        : dateOnly(rawStart);
+      let endDate = rawEnd ? dateOnly(rawEnd) : undefined;
+      if (endDate && rawEnd.length === 8) {
+        endDate = new Date(Date.parse(`${endDate}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
+      } else if (rawEnd.endsWith("Z") && rawEnd.includes("T")) {
+        endDate = localDate(parseIcsInstant(rawEnd), startZone);
+      }
+      const endTime = rawEnd.endsWith("Z") && rawEnd.includes("T")
+        ? new Intl.DateTimeFormat("en-GB", { timeZone: options.timeZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(parseIcsInstant(rawEnd))
+        : rawEnd.includes("T") ? `${rawEnd.slice(rawEnd.indexOf("T") + 1, rawEnd.indexOf("T") + 3)}:${rawEnd.slice(rawEnd.indexOf("T") + 3, rawEnd.indexOf("T") + 5)}` : null;
       const status = (item.STATUS ?? "CONFIRMED").toUpperCase();
       const title = (item.SUMMARY ?? "").replace(/\\[nN]/g, " ").replace(/\\,/g, ",").replace(/\\;/g, ";").trim();
-      const event = date && status === "CONFIRMED" ? mkEvent({ title, category: options.category, date, time: rawStart.includes("T") ? `${rawStart.slice(rawStart.indexOf("T") + 1, rawStart.indexOf("T") + 3)}:${rawStart.slice(rawStart.indexOf("T") + 3, rawStart.indexOf("T") + 5)}` : null, timeZone: item["DTSTART;TZID"] ?? options.timeZone, description: (item.DESCRIPTION ?? "").replace(/\\[nN]/g, " ").slice(0, 500), url: validUrl(item.URL, options.url)!, source: options.source, id: item.UID }) : null;
+      const startTime = utcStart
+        ? new Intl.DateTimeFormat("en-GB", { timeZone: options.timeZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(utcStart)
+        : rawStart.includes("T") ? `${rawStart.slice(rawStart.indexOf("T") + 1, rawStart.indexOf("T") + 3)}:${rawStart.slice(rawStart.indexOf("T") + 3, rawStart.indexOf("T") + 5)}` : null;
+      const event = date && status === "CONFIRMED" ? mkEvent({ title, category: options.category, date, ...(endDate ? { endDate, endTime } : {}), time: startTime, timeZone: utcStart ? options.timeZone : startZone, description: (item.DESCRIPTION ?? "").replace(/\\[nN]/g, " ").slice(0, 500), url: validUrl(item.URL, options.url)!, source: options.source, id: item.UID }) : null;
       if (event) events.push(event);
       item = null;
       continue;
@@ -114,6 +133,12 @@ export function parseIcsEvents(ics: string, options: { category: EventCategory; 
   return events;
 }
 
+function parseIcsInstant(value: string): Date {
+  const match = value.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/);
+  if (!match) return new Date(Number.NaN);
+  return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), Number(match[4]), Number(match[5]), Number(match[6])));
+}
+
 export function parseF1Calendar(html: string, year: number): CalendarEvent[] {
   const text = clean(html);
   const events: CalendarEvent[] = [];
@@ -126,11 +151,10 @@ export function parseF1Calendar(html: string, year: number): CalendarEvent[] {
     const title = `${location} Grand Prix ${match[5].trim()}`;
     if (/cancelled|canceled|called off|postponed/i.test(title)) continue;
     const startDay = Number(match[2]); const endDay = Number(match[3]);
-    for (let day = startDay; day <= endDay; day++) {
-      const date = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-      const event = mkEvent({ title: `Formula 1: ${title}`, category: "Спорт", date, time: null, timeZone: "Часовой пояс трассы не указан на странице сезона", description: "Дата входит в официальный уик-энд Гран-при Formula 1; точное расписание сессий на странице сезона не указано.", url: `https://www.formula1.com/en/racing/${year}`, source: "Formula 1" });
-      if (event) events.push(event);
-    }
+    const date = `${year}-${String(month).padStart(2, "0")}-${String(startDay).padStart(2, "0")}`;
+    const endDate = `${year}-${String(month).padStart(2, "0")}-${String(endDay).padStart(2, "0")}`;
+    const event = mkEvent({ title: `Formula 1: ${title}`, category: "Спорт", date, endDate, time: null, timeZone: "Часовой пояс трассы не указан на странице сезона", description: "Официально опубликован диапазон уик-энда; расписание отдельных сессий календарём сезона не подтверждено.", url: `https://www.formula1.com/en/racing/${year}`, source: "Formula 1" });
+    if (event) events.push(event);
   }
   return events;
 }
@@ -141,10 +165,10 @@ export function parseCesEvents(html: string, year: number): CalendarEvent[] {
   const pastStart = html.indexOf("Past Events", upcomingStart);
   const upcoming = html.slice(upcomingStart, pastStart < 0 ? undefined : pastStart);
   const events: CalendarEvent[] = [];
-  const blocks = upcoming.split(/<h[23][^>]*>/i).slice(1);
+  const blocks = upcoming.split(/<h[2-6][^>]*>/i).slice(1);
   const months: Record<string, number> = { January: 1, February: 2, March: 3, April: 4, May: 5, June: 6, July: 7, August: 8, September: 9, October: 10, November: 11, December: 12 };
   for (const block of blocks) {
-    const [heading = "", content = ""] = block.split(/<\/h[23]>/i, 2);
+    const [heading = "", content = ""] = block.split(/<\/h[2-6]>/i, 2);
     const title = clean(heading);
     const dateMatch = content.match(/(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\w*\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})/i);
     if (!dateMatch || Number(dateMatch[3]) !== year || !title) continue;
@@ -169,8 +193,9 @@ export function filterTodayEvents(events: CalendarEvent[], now: Date, timeZone =
       const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
       const offsetAtGuess = Date.UTC(Number(values.year), Number(values.month) - 1, Number(values.day), Number(values.hour), Number(values.minute)) - guess;
       const instant = new Date(guess - offsetAtGuess);
-      if (instant <= now || localDate(instant, timeZone) !== today) return false;
-    } else if (event.date !== today) return false;
+      const ongoing = Boolean(event.endDate && event.endTime && event.endDate >= today && instant <= now && now < eventWallInstant(event.endDate, event.endTime, event.timeZone));
+      if ((!ongoing && instant <= now) || (localDate(instant, timeZone) !== today && !ongoing)) return false;
+    } else if (event.date !== today && !(event.endDate && event.date < today && event.endDate >= today)) return false;
     const key = `${event.title.toLowerCase()}|${event.date}`;
     if (seen.has(key)) return false;
     seen.add(key);
@@ -178,7 +203,32 @@ export function filterTodayEvents(events: CalendarEvent[], now: Date, timeZone =
   }).map((event) => ({ ...event, date: today }));
 }
 
+function eventWallInstant(date: string, time: string, zone: string): Date {
+  const [year, month, day] = date.split("-").map(Number);
+  const [hour, minute] = time.split(":").map(Number);
+  const guess = Date.UTC(year, month - 1, day, hour, minute);
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(guess));
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const offset = Date.UTC(Number(values.year), Number(values.month) - 1, Number(values.day), Number(values.hour), Number(values.minute)) - guess;
+  return new Date(guess - offset);
+}
+
 export interface EventSourceStatus { source: string; count: number; ok: boolean; detail?: string }
+export async function fetchWithRetry(url: string, attempts = 3, timeoutMs = 45_000, fetcher: typeof fetch = fetch): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const response = await fetcher(url, { signal: AbortSignal.timeout(timeoutMs), headers: { "User-Agent": "daily-world-news/1.0 (+https://github.com/Alex4747/daily-world-news)" } });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response;
+    } catch (error) {
+      lastError = error;
+      if (attempt + 1 < attempts) await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+    }
+  }
+  throw lastError;
+}
+
 export async function fetchOfficialEvents(now = new Date(), report?: (status: EventSourceStatus) => void): Promise<CalendarEvent[]> {
   const year = Number(localDate(now, "Europe/Kyiv").slice(0, 4));
   const sources: Array<{ name: string; url: string; read: (body: string) => CalendarEvent[] }> = [
@@ -188,8 +238,7 @@ export async function fetchOfficialEvents(now = new Date(), report?: (status: Ev
     { name: "CES / CTA: события", url: SOURCE_URLS.ces, read: (body) => parseCesEvents(body, year) },
   ];
   const results = await Promise.allSettled(sources.map(async (source) => {
-    const response = await fetch(source.url, { signal: AbortSignal.timeout(20_000), headers: { "User-Agent": "daily-world-news/1.0 (+https://github.com/Alex4747/daily-world-news)" } });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const response = await fetchWithRetry(source.url);
     const parsed = source.read(await response.text());
     report?.({ source: source.name, count: parsed.length, ok: true });
     return parsed;

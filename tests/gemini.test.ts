@@ -48,6 +48,17 @@ test("Gemini SDK request uses JSON mode and preserves the source article referen
   assert.equal(digest.yesterday[0].url, article.url);
 });
 
+test("requests ten distinct stories when at least ten yesterday candidates exist", async () => {
+  const articles: Article[] = Array.from({ length: 12 }, (_, index) => ({ title: `Story ${index}`, description: "", url: `https://example.com/${index}`, source: "Source", publishedAt: "2026-11-11T12:00:00Z" }));
+  let request: Parameters<GoogleGenAI["models"]["generateContent"]>[0] | undefined;
+  const nouns = ["выборы", "переговоры", "землетрясение", "санкции", "перемирие", "инфляция", "саммит", "кибератака", "запуск", "забастовка"];
+  const mockModels: Pick<GoogleGenAI["models"], "generateContent"> = { generateContent: async (params) => { request = params; return { text: JSON.stringify({ yesterday: articles.slice(0, 10).map((_, articleIndex) => ({ articleIndex, title: `Срочные ${nouns[articleIndex]} мирового масштаба`, summary: `Подробности ${nouns[articleIndex]} и международная реакция`, category: "Мир", importance: 10 - articleIndex })), today: [] }) } as Awaited<ReturnType<GoogleGenAI["models"]["generateContent"]>>; } };
+  const digest = await createDigest(articles, "2026-11-11", "2026-11-12", "test-key", undefined, "Europe/Kyiv", mockModels);
+  const schema = request?.config?.responseSchema as { properties: { yesterday: { minItems?: string; maxItems?: string } } };
+  assert.equal(schema.properties.yesterday.minItems, "10");
+  assert.equal(digest.yesterday.length, 10);
+});
+
 test("removes repeated translated headlines and keeps the higher-ranked copy", () => {
   const articles: Article[] = [
     { title: "First report", description: "", url: "https://example.com/1", source: "BBC", publishedAt: "2026-11-10T12:00:00Z" },
