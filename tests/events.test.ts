@@ -15,6 +15,13 @@ test("filters calendar events on the Europe/Kyiv calendar date, across DST offse
   assert.equal(filterTodayEvents([event("2026-07-12")], summer).length, 1);
 });
 
+test("uses Kyiv's event date when a timed event crosses the source calendar's midnight", () => {
+  const now = new Date("2026-11-12T07:00:00Z");
+  const filtered = filterTodayEvents([event("2026-11-13", "00:30", "Asia/Tokyo")], now);
+  assert.equal(filtered.length, 1);
+  assert.equal(filtered[0].date, "2026-11-12");
+});
+
 test("keeps events announced months earlier because source publication dates are irrelevant", () => {
   const ics = ["BEGIN:VCALENDAR", "BEGIN:VEVENT", "UID:historic-announcement", "DTSTART;TZID=Europe/Paris:20261112T120000", "SUMMARY:Summit announced months ago", "DESCRIPTION:Official summit", "URL:https://example.org/summit", "STATUS:CONFIRMED", "END:VEVENT", "END:VCALENDAR"].join("\r\n");
   const parsed = parseIcsEvents(ics, { category: "Международные мероприятия", source: "Official organizer", timeZone: "Europe/Paris", url: "https://example.org/calendar" });

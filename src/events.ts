@@ -175,7 +175,7 @@ export function filterTodayEvents(events: CalendarEvent[], now: Date, timeZone =
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
-  });
+  }).map((event) => ({ ...event, date: today }));
 }
 
 export interface EventSourceStatus { source: string; count: number; ok: boolean; detail?: string }
