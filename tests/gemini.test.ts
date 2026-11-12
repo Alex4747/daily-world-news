@@ -40,6 +40,7 @@ test("Gemini SDK request uses JSON mode and preserves the source article referen
   assert.equal(request?.model, "gemini-3.5-flash-lite");
   assert.equal(request?.config?.responseMimeType, "application/json");
   assert.match(String(request?.contents), /https:\/\/example\.com\/election/);
+  assert.match(String(request?.contents), /If at least one such article is supplied, return at least one story/);
   assert.equal(digest.yesterday[0].url, article.url);
 });
 
