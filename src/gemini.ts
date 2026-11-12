@@ -89,5 +89,7 @@ export async function createDigest(
     result = parsed as GeminiOutput;
   }
   catch { throw new Error("Gemini returned invalid JSON."); }
-  return buildDigestFromOutput(articles, result, yesterdayDate, todayDate, timeZone);
+  const digest = buildDigestFromOutput(articles, result, yesterdayDate, todayDate, timeZone);
+  console.log(`Gemini selection: ${result.yesterday.length} raw yesterday items/${digest.yesterday.length} accepted; ${result.today.length} raw today events/${digest.today.length} accepted.`);
+  return digest;
 }
