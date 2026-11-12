@@ -14,14 +14,34 @@ async function main() {
   if (missing.length) throw new Error(`Missing required GitHub Actions/local secrets: ${missing.join(", ")}.`);
   const today = localDate(now, timezone);
   const yesterday = previousDate(now, timezone);
-  const articles = deduplicateArticles(await fetchRssFeeds());
+  const feedStatuses: Array<{ source: string; articleCount: number; ok: boolean }> = [];
+  const fetched = await fetchRssFeeds(undefined, (status) => {
+    feedStatuses.push(status);
+    console.log(`RSS ${status.source}: ${status.ok ? `${status.articleCount} articles` : "unavailable"}.`);
+  });
+  const articles = deduplicateArticles(fetched);
+  console.log(`RSS total: ${fetched.length} articles from ${feedStatuses.filter((status) => status.ok).length}/${feedStatuses.length} feeds; ${articles.length} after URL deduplication.`);
   const input = selectDigestArticles(articles, yesterday, today, timezone);
-  if (!input.length) throw new Error(`No eligible RSS articles found for yesterday or confirmed events for ${today}; refusing to send an empty digest.`);
+  console.log(`Eligible candidate articles sent to Gemini: ${input.length}.`);
+  if (!input.length) {
+    if (dryRun) {
+      console.log(JSON.stringify({ mode: "dry-run", date: today, candidates: 0, result: "no-eligible-articles" }));
+      return;
+    }
+    throw new Error(`No eligible RSS articles found for yesterday or confirmed events for ${today}; refusing to send an empty digest.`);
+  }
   const digest = await createDigest(input, yesterday, today, process.env.GEMINI_API_KEY || "", process.env.GEMINI_MODEL);
   const messages = formatDigest(digest);
-  if (!messages.length) throw new Error("Digest has no stories; refusing to send an empty digest.");
+  console.log(`Gemini result: ${digest.yesterday.length} yesterday stories, ${digest.today.length} confirmed events for today.`);
+  if (!messages.length) {
+    if (dryRun) {
+      console.log(JSON.stringify({ mode: "dry-run", date: today, candidates: input.length, yesterday: 0, todayEvents: 0, result: "no-confirmed-stories" }));
+      return;
+    }
+    throw new Error("Digest has no stories; refusing to send an empty digest.");
+  }
   if (dryRun) {
-    console.log(JSON.stringify({ mode: "dry-run", date: today, messages }, null, 2));
+    console.log(JSON.stringify({ mode: "dry-run", date: today, feedStatuses, fetchedArticles: fetched.length, deduplicatedArticles: articles.length, candidates: input.length, yesterday: digest.yesterday.length, todayEvents: digest.today.length, messages }, null, 2));
     return;
   }
   await sendTelegram(messages, process.env.TELEGRAM_BOT_TOKEN || "", process.env.TELEGRAM_CHAT_ID || "");

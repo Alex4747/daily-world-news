@@ -12,6 +12,12 @@ export const FEEDS = [
 
 const parser = new Parser({ timeout: 15_000, headers: { "User-Agent": "WorldNewsDigest/1.0" } });
 
+export interface FeedStatus {
+  source: string;
+  articleCount: number;
+  ok: boolean;
+}
+
 interface FeedItem {
   title?: string;
   link?: string;
@@ -51,10 +57,18 @@ export async function parseFeedXml(xml: string, source: string): Promise<Article
   return toArticles(await parser.parseString(xml), source);
 }
 
-export async function fetchRssFeeds(feeds = FEEDS): Promise<Article[]> {
+export async function fetchRssFeeds(
+  feeds = FEEDS,
+  report?: (status: FeedStatus) => void,
+): Promise<Article[]> {
   const results = await Promise.allSettled(feeds.map(async ({ source, url }) => {
     const feed = await parser.parseURL(url);
     return toArticles(feed, source);
+  }));
+  results.forEach((result, index) => report?.({
+    source: feeds[index].source,
+    articleCount: result.status === "fulfilled" ? result.value.length : 0,
+    ok: result.status === "fulfilled",
   }));
   const articles = results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
   if (articles.length === 0) {
