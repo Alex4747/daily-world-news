@@ -63,7 +63,7 @@ export function buildDigestFromOutput(articles: Article[], result: GeminiOutput,
 
 export async function createDigest(
   articles: Article[], yesterdayDate: string, todayDate: string, apiKey: string,
-  model = "gemini-2.5-flash-lite", timeZone = "Europe/Kyiv",
+  model = "gemini-3.5-flash-lite", timeZone = "Europe/Kyiv",
   client?: Pick<GoogleGenAI["models"], "generateContent">,
 ): Promise<Digest> {
   if (!apiKey) throw new Error("GEMINI_API_KEY is required.");

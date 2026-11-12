@@ -37,7 +37,7 @@ test("Gemini SDK request uses JSON mode and preserves the source article referen
     },
   };
   const digest = await createDigest([article], "2026-11-10", "2026-11-11", "test-key", undefined, "Europe/Kyiv", mockModels);
-  assert.equal(request?.model, "gemini-2.5-flash-lite");
+  assert.equal(request?.model, "gemini-3.5-flash-lite");
   assert.equal(request?.config?.responseMimeType, "application/json");
   assert.match(String(request?.contents), /https:\/\/example\.com\/election/);
   assert.equal(digest.yesterday[0].url, article.url);
