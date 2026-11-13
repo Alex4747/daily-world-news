@@ -59,6 +59,29 @@ test("requests ten distinct stories when at least ten yesterday candidates exist
   assert.equal(digest.yesterday.length, 10);
 });
 
+test("retries transient Gemini errors and falls back to another model", async () => {
+  const article: Article = { title: "Election report", description: "", url: "https://example.com/election", source: "BBC News", publishedAt: "2026-11-10T12:00:00Z" };
+  const models: string[] = [];
+  const mockModels: Pick<GoogleGenAI["models"], "generateContent"> = {
+    generateContent: async (params) => {
+      models.push(String(params.model));
+      if (params.model !== "gemini-2.5-flash") throw Object.assign(new Error("Service Unavailable"), { status: 503 });
+      return { text: JSON.stringify({ yesterday: [{ articleIndex: 0, title: "Итоги выборов", summary: "Опубликованы результаты.", category: "Политика", importance: 9 }], today: [] }) } as Awaited<ReturnType<GoogleGenAI["models"]["generateContent"]>>;
+    },
+  };
+  const digest = await createDigest([article], "2026-11-10", "2026-11-11", "test-key", undefined, "Europe/Kyiv", mockModels, [], 1);
+  assert.deepEqual(models, [...Array(4).fill("gemini-3.5-flash-lite"), "gemini-2.5-flash"]);
+  assert.equal(digest.yesterday.length, 1);
+});
+
+test("does not retry non-transient Gemini errors", async () => {
+  const article: Article = { title: "Election report", description: "", url: "https://example.com/election", source: "BBC News", publishedAt: "2026-11-10T12:00:00Z" };
+  let calls = 0;
+  const mockModels: Pick<GoogleGenAI["models"], "generateContent"> = { generateContent: async () => { calls++; throw Object.assign(new Error("Bad key"), { status: 400 }); } };
+  await assert.rejects(createDigest([article], "2026-11-10", "2026-11-11", "test-key", undefined, "Europe/Kyiv", mockModels, [], 1), /Bad key/);
+  assert.equal(calls, 1);
+});
+
 test("removes repeated translated headlines and keeps the higher-ranked copy", () => {
   const articles: Article[] = [
     { title: "First report", description: "", url: "https://example.com/1", source: "BBC", publishedAt: "2026-11-10T12:00:00Z" },

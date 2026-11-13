@@ -60,14 +60,48 @@ export function buildDigestFromOutput(articles: Article[], result: GeminiOutput,
   return { date: todayDate, yesterday: uniqueYesterday, today: uniqueToday };
 }
 
+const FALLBACK_MODEL = "gemini-2.5-flash";
+
+function isTransientError(error: unknown): boolean {
+  const status = (error as { status?: unknown })?.status;
+  if (typeof status === "number") return [429, 500, 502, 503, 504].includes(status);
+  return /unavailable|overloaded|high demand|rate limit|resource exhausted|timed? ?out|fetch failed|\b(429|500|502|503|504)\b/i.test(error instanceof Error ? error.message : String(error));
+}
+
+// Retries transient Gemini failures with growing pauses, then falls back to a second model.
+async function generateWithRetry(
+  models: Pick<GoogleGenAI["models"], "generateContent">,
+  params: Parameters<GoogleGenAI["models"]["generateContent"]>[0],
+  retryDelayMs: number,
+) {
+  const candidates = [params.model, ...(params.model === FALLBACK_MODEL ? [] : [FALLBACK_MODEL])];
+  const attemptsPerModel = 4;
+  let lastError: unknown;
+  for (const model of candidates) {
+    for (let attempt = 0; attempt < attemptsPerModel; attempt++) {
+      try {
+        if (model !== params.model) console.warn(`Gemini: using fallback model ${model}.`);
+        return await models.generateContent({ ...params, model });
+      } catch (error) {
+        lastError = error;
+        if (!isTransientError(error)) throw error;
+        console.warn(`Gemini ${model} attempt ${attempt + 1}/${attemptsPerModel} failed: ${error instanceof Error ? error.message : error}`);
+        if (attempt + 1 < attemptsPerModel) await new Promise((resolve) => setTimeout(resolve, retryDelayMs * 2 ** attempt));
+      }
+    }
+  }
+  throw lastError;
+}
+
 export async function createDigest(
   articles: Article[], yesterdayDate: string, todayDate: string, apiKey: string,
   model = "gemini-3.5-flash-lite", timeZone = "Europe/Kyiv",
   client?: Pick<GoogleGenAI["models"], "generateContent">,
   events: CalendarEvent[] = [],
+  retryDelayMs = 5_000,
 ): Promise<Digest> {
   if (!apiKey) throw new Error("GEMINI_API_KEY is required.");
-  const models = client ?? new GoogleGenAI({ apiKey, httpOptions: { retryOptions: { attempts: 5 } } }).models;
+  const models = client ?? new GoogleGenAI({ apiKey, httpOptions: { retryOptions: { attempts: 1 } } }).models;
   const input = articles.map((a, i) => ({ articleIndex: i, ...a }));
   const eventInput = events.map((event, eventIndex) => ({ eventIndex, ...event }));
   const yesterdayStorySchema = {
@@ -88,7 +122,7 @@ export async function createDigest(
   };
   const requestedNews = Math.min(10, input.length);
   const prompt = `Prepare a concise Russian world news digest. Use only the supplied records; never invent stories, events, facts, dates, times, confirmation, or URLs.\nYesterday section: articles are prefiltered to publication date ${yesterdayDate} in ${timeZone}. Select exactly ${requestedNews} distinct, globally important stories when that many non-duplicate candidates are available; otherwise return every qualifying distinct story. Do not stop at five. Preserve articleIndex and use a different index for each story.\nToday's events section: these events were independently obtained from official calendars and prefiltered to ${todayDate} in ${timeZone}. Choose up to 10 most significant. Return only eventIndex values present in the supplied list; do not add, merge, or infer events. Translate title and description into Russian, preserving meaning. Return category and importance 1..10. The event date/time/timezone/source URL/confirmation are fixed by the supplied event record and will be attached by the application.\nReturn strict JSON matching {"yesterday":[...],"today":[...]}.\nArticles: ${JSON.stringify(input)}\nOfficial calendar events: ${JSON.stringify(eventInput)}`;
-  const response = await models.generateContent({
+  const response = await generateWithRetry(models, {
     model,
     contents: prompt,
     config: {
@@ -104,7 +138,7 @@ export async function createDigest(
       },
       temperature: 0.1,
     },
-  });
+  }, retryDelayMs);
   if (!response.text) throw new Error("Gemini returned an empty response.");
   let result: GeminiOutput;
   try {
