@@ -17,7 +17,7 @@ export interface CalendarEvent {
 }
 
 const SOURCE_URLS = {
-  europeanParliament: "https://data.europarl.europa.eu/api/v2/meetings?limit=100",
+  europarlUrl: (year: number) => `https://data.europarl.europa.eu/api/v2/meetings?year=${year}&limit=500&format=application%2Fld%2Bjson`,
   ecb: "https://www.ecb.europa.eu/press/calendars/mgcgc/html/index.en.html",
   f1: `https://www.formula1.com/en/racing/${new Date().getUTCFullYear()}`,
   ces: "https://www.ces.tech/events/",
@@ -77,14 +77,20 @@ export function parseEuroParliamentMeetings(json: unknown): CalendarEvent[] {
   return root.data.flatMap((raw) => {
     if (!raw || typeof raw !== "object") return [];
     const item = raw as Record<string, unknown>;
-    const title = String(item["label"] ?? item["title"] ?? item["meeting-label"] ?? "").trim();
-    const start = String(item["start-date"] ?? item["startDate"] ?? item["meeting-start-date"] ?? "");
+    // The JSON-LD API publishes whole-day sittings (activity_start_date is a 01:00 placeholder), so no start time is exposed.
+    const isActivity = typeof item["activity_start_date"] === "string";
+    const activityType = String(item["had_activity_type"] ?? "").split("/").pop() ?? "";
+    const title = isActivity
+      ? (activityType === "PLENARY_SITTING" ? "Пленарное заседание Европейского парламента" : "")
+      : String(item["label"] ?? item["title"] ?? item["meeting-label"] ?? "").trim();
+    const start = String(item["activity_start_date"] ?? item["start-date"] ?? item["startDate"] ?? item["meeting-start-date"] ?? "");
     const date = dateOnly(start);
-    const idUrl = validUrl(item["id"]);
+    const id = typeof item["id"] === "string" && !/^[a-z][a-z0-9+.-]*:/i.test(item["id"]) ? `https://data.europarl.europa.eu/${item["id"]}` : item["id"];
+    const idUrl = validUrl(id);
     const url = idUrl ?? "https://www.europarl.europa.eu/plenary/en/meetings-search.html";
     const status = String(item["status"] ?? item["event-status"] ?? "").toLowerCase();
     if (!date || !title || /cancel|postpon|tentative|provisional/i.test(status)) return [];
-    const event = mkEvent({ title, category: "Политика", date, time: start.includes("T") ? start.slice(11, 16) : null, timeZone: "Europe/Brussels", description: "Заседание Европейского парламента из официального Open Data API.", url, source: "Европейский парламент" });
+    const event = mkEvent({ title, category: "Политика", date, time: !isActivity && start.includes("T") ? start.slice(11, 16) : null, timeZone: "Europe/Brussels", description: "Заседание Европейского парламента из официального Open Data API.", url, source: "Европейский парламент" });
     return event ? [event] : [];
   });
 }
@@ -232,7 +238,7 @@ export async function fetchWithRetry(url: string, attempts = 3, timeoutMs = 45_0
 export async function fetchOfficialEvents(now = new Date(), report?: (status: EventSourceStatus) => void): Promise<CalendarEvent[]> {
   const year = Number(localDate(now, "Europe/Kyiv").slice(0, 4));
   const sources: Array<{ name: string; url: string; read: (body: string) => CalendarEvent[] }> = [
-    { name: "Европейский парламент Open Data API", url: SOURCE_URLS.europeanParliament, read: (body) => parseEuroParliamentMeetings(JSON.parse(body)) },
+    { name: "Европейский парламент Open Data API", url: SOURCE_URLS.europarlUrl(year), read: (body) => parseEuroParliamentMeetings(JSON.parse(body)) },
     { name: "ЕЦБ: календарь заседаний", url: SOURCE_URLS.ecb, read: parseEcbCalendar },
     { name: "Formula 1: календарь сезона", url: SOURCE_URLS.f1.replace(/\d{4}$/, String(year)), read: (body) => parseF1Calendar(body, year) },
     { name: "CES / CTA: события", url: SOURCE_URLS.ces, read: (body) => parseCesEvents(body, year) },

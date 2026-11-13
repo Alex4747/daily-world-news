@@ -30,8 +30,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run build
-      - run: npm test
+      - run: npx tsc -p tsconfig.json
+      - run: npm run test:node
       - name: Prepare digest without sending (manual dry run)
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run
         run: npm start

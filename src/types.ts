@@ -27,3 +27,17 @@ export interface Digest {
   yesterday: DigestStory[];
   today: PlannedEvent[];
 }
+
+export interface SourceStatus {
+  source: string;
+  ok: boolean;
+  count: number;
+}
+
+/** Payload of GET /api/digest consumed by the React client. */
+export interface DigestResponse extends Digest {
+  yesterdayDate: string;
+  timeZone: string;
+  generatedAt: string;
+  sources: { feeds: SourceStatus[]; events: SourceStatus[] };
+}

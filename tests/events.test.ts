@@ -75,6 +75,17 @@ test("parses official European Parliament event rows with dated source links", (
   assert.equal(events[0].url, "https://data.europarl.europa.eu/eli/dl/event/MTG-PL-2026-11-12");
 });
 
+test("parses the JSON-LD European Parliament API shape as an all-day plenary sitting", () => {
+  const events = parseEuroParliamentMeetings({ data: [
+    { id: "eli/dl/event/MTG-PL-2026-12-15", activity_start_date: "2026-12-15T01:00:00+01:00", activity_end_date: "2026-12-15T23:00:00+01:00", had_activity_type: "def/ep-activities/PLENARY_SITTING", activity_label: { en: "Tuesday, 15 December 2026" } },
+    { id: "eli/dl/event/MTG-XX", activity_start_date: "2026-12-16T01:00:00+01:00", had_activity_type: "def/ep-activities/OTHER" },
+  ] });
+  assert.equal(events.length, 1);
+  assert.equal(events[0].date, "2026-12-15");
+  assert.equal(events[0].time, null);
+  assert.equal(events[0].url, "https://data.europarl.europa.eu/eli/dl/event/MTG-PL-2026-12-15");
+});
+
 test("retries a transient official source failure and eventually succeeds", async () => {
   let calls = 0;
   const response = await fetchWithRetry("https://example.org/calendar", 3, 50, async () => {
