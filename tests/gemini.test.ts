@@ -1,6 +1,6 @@
-import test from "node:test";
+﻿import test from "node:test";
 import assert from "node:assert/strict";
-import { buildDigestFromOutput, createDigest, findTodayEventsViaSearch } from "../src/gemini.js";
+import { buildDigestFromOutput, createDigest, findTodayEventsInArticles, findTodayEventsViaSearch } from "../src/gemini.js";
 import type { GoogleGenAI } from "@google/genai";
 import type { Article } from "../src/types.js";
 import type { CalendarEvent } from "../src/events.js";
@@ -65,12 +65,12 @@ test("retries transient Gemini errors and falls back to another model", async ()
   const mockModels: Pick<GoogleGenAI["models"], "generateContent"> = {
     generateContent: async (params) => {
       models.push(String(params.model));
-      if (params.model !== "gemini-2.5-flash") throw Object.assign(new Error("Service Unavailable"), { status: 503 });
+      if (params.model !== "gemini-3.5-flash") throw Object.assign(new Error("Service Unavailable"), { status: 503 });
       return { text: JSON.stringify({ yesterday: [{ articleIndex: 0, title: "Итоги выборов", summary: "Опубликованы результаты.", category: "Политика", importance: 9 }], today: [] }) } as Awaited<ReturnType<GoogleGenAI["models"]["generateContent"]>>;
     },
   };
   const digest = await createDigest([article], "2026-11-10", "2026-11-11", "test-key", undefined, "Europe/Kyiv", mockModels, [], 1);
-  assert.deepEqual(models, [...Array(4).fill("gemini-3.5-flash-lite"), "gemini-2.5-flash"]);
+  assert.deepEqual(models, [...Array(4).fill("gemini-3.5-flash-lite"), "gemini-3.5-flash"]);
   assert.equal(digest.yesterday.length, 1);
 });
 
@@ -104,13 +104,37 @@ test("web search moves to the next model when the first one is rate limited", as
   const client: Pick<GoogleGenAI["models"], "generateContent"> = {
     generateContent: async (params) => {
       used.push(String(params.model));
-      if (params.model !== "gemini-2.5-flash") throw new Error("Retryable HTTP Error: Too Many Requests");
+      if (params.model !== "gemini-3.5-flash") throw new Error("Retryable HTTP Error: Too Many Requests");
       return { text: JSON.stringify([{ title: "Премьера фильма", summary: "Мировая премьера.", category: "Кино", importance: 7, date: "2026-11-17", time: null, sourceUrl: "https://example.com/film" }]), candidates: [{ groundingMetadata: { groundingChunks: [{}] } }] } as unknown as Awaited<ReturnType<GoogleGenAI["models"]["generateContent"]>>;
     },
   };
   const events = await findTodayEventsViaSearch("2026-11-17", "Europe/Kyiv", 10, [], "key", undefined, client, 1);
-  assert.deepEqual(used, ["gemini-3.5-flash-lite", "gemini-3.5-flash-lite", "gemini-2.5-flash"]);
+  assert.deepEqual(used, ["gemini-3.5-flash-lite", "gemini-3.5-flash"]);
   assert.equal(events.length, 1);
+});
+
+test("article scan keeps the source article and rejects unknown indexes", async () => {
+  const articles: Article[] = [
+    { title: "Leaders to meet on Tuesday", description: "Talks in Geneva at 14:00.", url: "https://example.com/talks", source: "BBC News", publishedAt: "2026-11-16T18:00:00Z" },
+    { title: "Other", description: "", url: "https://example.com/other", source: "DW", publishedAt: "2026-11-16T18:00:00Z" },
+  ];
+  let prompt = "";
+  const client: Pick<GoogleGenAI["models"], "generateContent"> = {
+    generateContent: async (params) => {
+      prompt = String(params.contents);
+      return { text: JSON.stringify([
+        { articleIndex: 0, title: "Переговоры лидеров в Женеве", summary: "Встреча запланирована на сегодня.", category: "Политика", importance: 9, time: "14:00" },
+        { articleIndex: 0, title: "Дубликат индекса", summary: "Повтор.", category: "Мир", importance: 5 },
+        { articleIndex: 7, title: "Несуществующая статья", summary: "Нет такой.", category: "Мир", importance: 8 },
+      ]) } as Awaited<ReturnType<GoogleGenAI["models"]["generateContent"]>>;
+    },
+  };
+  const events = await findTodayEventsInArticles(articles, "2026-11-17", "Europe/Kyiv", 10, [], "key", undefined, client, 1);
+  assert.match(prompt, /exactly 2026-11-17/);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].url, "https://example.com/talks");
+  assert.equal(events[0].eventTime, "14:00");
+  assert.equal(events[0].confirmation, "reported");
 });
 
 test("removes repeated translated headlines and keeps the higher-ranked copy", () => {

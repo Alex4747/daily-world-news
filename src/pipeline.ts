@@ -1,4 +1,4 @@
-import { createDigest, findTodayEventsViaSearch, uniqueStories } from "./gemini.js";
+import { createDigest, findTodayEventsInArticles, findTodayEventsViaSearch, uniqueStories } from "./gemini.js";
 import { localDate, previousDate } from "./dates.js";
 import { deduplicateArticles, fetchRssFeeds, type FeedStatus } from "./rss.js";
 import { selectDigestArticles } from "./selection.js";
@@ -58,6 +58,12 @@ export async function runPipeline(options: PipelineOptions): Promise<PipelineRes
     ? await createDigest(candidates, yesterday, today, apiKey, model, timeZone, undefined, eventCandidates)
     : { date: today, yesterday: [], today: [] };
   log(`Gemini result: ${digest.yesterday.length} yesterday stories, ${digest.today.length} official events for today.`);
+  if (digest.today.length < MAX_TODAY_EVENTS) {
+    const eventArticles = [...selectDigestArticles(articles, today, undefined, timeZone), ...candidates];
+    const fromArticles = await findTodayEventsInArticles(eventArticles, today, timeZone, MAX_TODAY_EVENTS - digest.today.length, digest.today.map((event) => event.title), apiKey, model);
+    digest = { ...digest, today: uniqueStories([...digest.today, ...fromArticles]).slice(0, MAX_TODAY_EVENTS) };
+    log(`Today's events after scanning ${eventArticles.length} articles: ${digest.today.length}.`);
+  }
   if (digest.today.length < MAX_TODAY_EVENTS) {
     const found = await findTodayEventsViaSearch(today, timeZone, MAX_TODAY_EVENTS - digest.today.length, digest.today.map((event) => event.title), apiKey, model);
     digest = { ...digest, today: uniqueStories([...digest.today, ...found]).slice(0, MAX_TODAY_EVENTS) };
