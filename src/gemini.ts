@@ -162,7 +162,7 @@ export async function createDigest(
 interface SearchedEvent { title?: unknown; summary?: unknown; category?: unknown; importance?: unknown; date?: unknown; time?: unknown; sourceUrl?: unknown }
 
 function parseSearchedEvents(text: string, todayDate: string, timeZone: string): PlannedEvent[] {
-  const start = text.indexOf("[");
+  const start = text.search(/\[\s*[{\]]/);
   const end = text.lastIndexOf("]");
   if (start < 0 || end <= start) return [];
   let raw: unknown;
@@ -175,7 +175,8 @@ function parseSearchedEvents(text: string, todayDate: string, timeZone: string):
     const summary = item.summary.replace(/\s+/g, " ").trim().slice(0, 700);
     let url: URL;
     try { url = new URL(item.sourceUrl); } catch { return []; }
-    if (!title || !summary || (url.protocol !== "https:" && url.protocol !== "http:")) return [];
+    // Telegram formatting rejects URLs over 1800 characters, which would otherwise abort the whole digest.
+    if (!title || !summary || (url.protocol !== "https:" && url.protocol !== "http:") || url.href.length > 1800) return [];
     const time = typeof item.time === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(item.time) ? item.time : null;
     const importance = Number.isFinite(item.importance) ? Math.max(1, Math.min(10, Math.round(item.importance as number))) : 5;
     const category = typeof item.category === "string" ? item.category.replace(/\s+/g, " ").trim().slice(0, 60) || "Мир" : "Мир";
