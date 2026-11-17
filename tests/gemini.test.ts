@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildDigestFromOutput, createDigest } from "../src/gemini.js";
+import { buildDigestFromOutput, createDigest, findTodayEventsViaSearch } from "../src/gemini.js";
 import type { GoogleGenAI } from "@google/genai";
 import type { Article } from "../src/types.js";
 import type { CalendarEvent } from "../src/events.js";
@@ -80,6 +80,23 @@ test("does not retry non-transient Gemini errors", async () => {
   const mockModels: Pick<GoogleGenAI["models"], "generateContent"> = { generateContent: async () => { calls++; throw Object.assign(new Error("Bad key"), { status: 400 }); } };
   await assert.rejects(createDigest([article], "2026-11-10", "2026-11-11", "test-key", undefined, "Europe/Kyiv", mockModels, [], 1), /Bad key/);
   assert.equal(calls, 1);
+});
+
+test("web-search events are accepted only when grounded, dated today and linked", async () => {
+  const answer = JSON.stringify([
+    { title: "Заседание ФРС", summary: "Решение по ставке.", category: "Экономика", importance: 9, date: "2026-11-17", time: "21:00", sourceUrl: "https://www.federalreserve.gov/calendar" },
+    { title: "Вчерашний саммит", summary: "Уже прошёл.", category: "Политика", importance: 8, date: "2026-11-16", time: null, sourceUrl: "https://example.com/old" },
+    { title: "Без ссылки", summary: "Нет источника.", category: "Мир", importance: 7, date: "2026-11-17", time: null, sourceUrl: "javascript:alert(1)" },
+  ]);
+  const make = (grounded: boolean): Pick<GoogleGenAI["models"], "generateContent"> => ({
+    generateContent: async () => ({ text: `\`\`\`json\n${answer}\n\`\`\``, candidates: [{ groundingMetadata: { groundingChunks: grounded ? [{ web: { uri: "https://x" } }] : [] } }] }) as Awaited<ReturnType<GoogleGenAI["models"]["generateContent"]>>,
+  });
+  const events = await findTodayEventsViaSearch("2026-11-17", "Europe/Kyiv", 10, [], "key", undefined, make(true), 1);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].source, "federalreserve.gov");
+  assert.equal(events[0].eventTime, "21:00");
+  assert.equal(events[0].confirmation, "web");
+  assert.deepEqual(await findTodayEventsViaSearch("2026-11-17", "Europe/Kyiv", 10, [], "key", undefined, make(false), 1), []);
 });
 
 test("removes repeated translated headlines and keeps the higher-ranked copy", () => {

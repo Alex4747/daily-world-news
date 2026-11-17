@@ -1,6 +1,6 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { localDate } from "./dates.js";
-import type { Article, Digest } from "./types.js";
+import type { Article, Digest, PlannedEvent } from "./types.js";
 import type { CalendarEvent } from "./events.js";
 
 interface GeminiOutput {
@@ -8,7 +8,7 @@ interface GeminiOutput {
   today: Array<{ eventIndex: number; title: string; summary: string; category: string; importance: number }>;
 }
 
-function uniqueStories<T extends { title: string; importance: number }>(stories: T[]): T[] {
+export function uniqueStories<T extends { title: string; importance: number }>(stories: T[]): T[] {
   const chosen: T[] = [];
   const tokens = (title: string) => new Set(title.toLocaleLowerCase("ru").replace(/[^\p{L}\p{N}]+/gu, " ").split(/\s+/).filter((word) => word.length > 2));
   for (const story of [...stories].sort((a, b) => b.importance - a.importance)) {
@@ -152,4 +152,54 @@ export async function createDigest(
   const digest = buildDigestFromOutput(articles, result, yesterdayDate, todayDate, timeZone, events);
   console.log(`Gemini selection: ${result.yesterday.length} raw yesterday items/${digest.yesterday.length} accepted; ${result.today.length} raw today events/${digest.today.length} accepted.`);
   return digest;
+}
+
+interface SearchedEvent { title?: unknown; summary?: unknown; category?: unknown; importance?: unknown; date?: unknown; time?: unknown; sourceUrl?: unknown }
+
+function parseSearchedEvents(text: string, todayDate: string, timeZone: string): PlannedEvent[] {
+  const start = text.indexOf("[");
+  const end = text.lastIndexOf("]");
+  if (start < 0 || end <= start) return [];
+  let raw: unknown;
+  try { raw = JSON.parse(text.slice(start, end + 1)); } catch { return []; }
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((item: SearchedEvent) => {
+    if (!item || typeof item !== "object" || item.date !== todayDate) return [];
+    if (typeof item.title !== "string" || typeof item.summary !== "string" || typeof item.sourceUrl !== "string") return [];
+    const title = item.title.replace(/\s+/g, " ").trim().slice(0, 240);
+    const summary = item.summary.replace(/\s+/g, " ").trim().slice(0, 700);
+    let url: URL;
+    try { url = new URL(item.sourceUrl); } catch { return []; }
+    if (!title || !summary || (url.protocol !== "https:" && url.protocol !== "http:")) return [];
+    const time = typeof item.time === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(item.time) ? item.time : null;
+    const importance = Number.isFinite(item.importance) ? Math.max(1, Math.min(10, Math.round(item.importance as number))) : 5;
+    const category = typeof item.category === "string" ? item.category.replace(/\s+/g, " ").trim().slice(0, 60) || "Мир" : "Мир";
+    return [{ title, summary, category, importance, source: url.hostname.replace(/^www\./, ""), url: url.href, eventDate: todayDate, eventTime: time, timeZone, confirmation: "web" as const }];
+  });
+}
+
+/** Asks Gemini (with Google Search grounding) for scheduled events of the day; returns [] on any failure so the digest still goes out. */
+export async function findTodayEventsViaSearch(
+  todayDate: string, timeZone: string, limit: number, knownTitles: string[],
+  apiKey: string, model = "gemini-3.5-flash-lite",
+  client?: Pick<GoogleGenAI["models"], "generateContent">,
+  retryDelayMs = 5_000,
+): Promise<PlannedEvent[]> {
+  if (limit <= 0 || !apiKey) return [];
+  const models = client ?? new GoogleGenAI({ apiKey, httpOptions: { retryOptions: { attempts: 1 } } }).models;
+  const prompt = `Today is ${todayDate} in ${timeZone}. Use Google Search to find the ${limit} most important scheduled world events that take place on exactly ${todayDate}: political summits, elections and votes, central bank decisions and key economic data releases, court rulings, major sports finals and matches, space launches, large tech or product presentations, international conferences.\nInclude only events that are officially announced for that date and not cancelled; never include events that already happened in the past, rumours or guesses.\nSkip events already covered: ${JSON.stringify(knownTitles)}.\nReturn ONLY a JSON array (no markdown, no commentary) of up to ${limit} objects: {"title": Russian title, "summary": 1-2 sentence Russian description, "category": one Russian word, "importance": integer 1..10, "date": "YYYY-MM-DD", "time": "HH:MM" in ${timeZone} or null if unknown, "sourceUrl": direct URL of the page that announces the event}. Return [] if nothing reliable is found.`;
+  try {
+    const response = await generateWithRetry(models, { model, contents: prompt, config: { tools: [{ googleSearch: {} }], temperature: 0.1 } }, retryDelayMs);
+    const grounded = (response.candidates?.[0]?.groundingMetadata?.groundingChunks?.length ?? 0) > 0;
+    if (!grounded || !response.text) {
+      console.warn("Gemini search returned no grounded answer; skipping web-found events.");
+      return [];
+    }
+    const events = uniqueStories(parseSearchedEvents(response.text, todayDate, timeZone)).slice(0, limit);
+    console.log(`Gemini web search: ${events.length} events for ${todayDate}.`);
+    return events;
+  } catch (error) {
+    console.warn(`Gemini web search for today's events failed: ${error instanceof Error ? error.message : error}`);
+    return [];
+  }
 }

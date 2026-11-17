@@ -19,7 +19,8 @@ export interface PlannedEvent extends DigestStory {
   eventDate: string;
   eventTime: string | null;
   timeZone: string;
-  confirmation: "confirmed";
+  /** "confirmed" = official calendar record; "web" = found via Gemini Google Search grounding. */
+  confirmation: "confirmed" | "web";
 }
 
 export interface Digest {

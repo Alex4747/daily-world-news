@@ -33,7 +33,7 @@ export function EventCard({ event, rank }: { event: PlannedEvent; rank: number }
             {event.eventDate}{event.eventTime ? ` · ${event.eventTime}` : ""}
           </time>{" "}
           · {event.timeZone} · {event.source} ·{" "}
-          <a href={event.url} target="_blank" rel="noopener noreferrer">Первоисточник</a>
+          <a href={event.url} target="_blank" rel="noopener noreferrer">{event.confirmation === "confirmed" ? "Первоисточник" : "Источник"}</a>
         </Meta>
       </div>
     </li>

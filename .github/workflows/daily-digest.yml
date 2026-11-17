@@ -2,7 +2,7 @@ name: Daily world news digest
 
 on:
   schedule:
-    - cron: "0 9 * * *"
+    - cron: "7 8 * * *" # earlier, off-peak slot; the job waits until 09:00 Kyiv before sending
       timezone: Europe/Kyiv
   workflow_dispatch:
     inputs:
@@ -22,7 +22,7 @@ concurrency:
 jobs:
   digest:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -32,6 +32,16 @@ jobs:
       - run: npm ci
       - run: npx tsc -p tsconfig.json
       - run: npm run test:node
+      - name: Wait until 09:00 Kyiv (scheduled runs only)
+        if: github.event_name == 'schedule'
+        run: |
+          now=$(date +%s)
+          target=$(TZ=Europe/Kyiv date -d "today 09:00" +%s)
+          wait=$((target - now))
+          if [ "$wait" -gt 0 ] && [ "$wait" -le 5400 ]; then
+            echo "Sleeping ${wait}s until 09:00 Europe/Kyiv"
+            sleep "$wait"
+          fi
       - name: Prepare digest without sending (manual dry run)
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run
         run: npm start

@@ -1,10 +1,12 @@
-import { createDigest } from "./gemini.js";
+import { createDigest, findTodayEventsViaSearch, uniqueStories } from "./gemini.js";
 import { localDate, previousDate } from "./dates.js";
 import { deduplicateArticles, fetchRssFeeds, type FeedStatus } from "./rss.js";
 import { selectDigestArticles } from "./selection.js";
 import { fetchOfficialEvents, filterTodayEvents, type EventSourceStatus } from "./events.js";
 import type { Article, Digest } from "./types.js";
 import type { CalendarEvent } from "./events.js";
+
+const MAX_TODAY_EVENTS = 10;
 
 export interface PipelineOptions {
   now?: Date;
@@ -52,8 +54,14 @@ export async function runPipeline(options: PipelineOptions): Promise<PipelineRes
     today, yesterday, timeZone, feedStatuses, eventStatuses, candidates, eventCandidates,
     fetchedArticles: fetched.length, deduplicatedArticles: articles.length,
   };
-  if (!candidates.length && !eventCandidates.length) return { ...base, digest: null };
-  const digest = await createDigest(candidates, yesterday, today, apiKey, model, timeZone, undefined, eventCandidates);
-  log(`Gemini result: ${digest.yesterday.length} yesterday stories, ${digest.today.length} confirmed events for today.`);
-  return { ...base, digest };
+  let digest: Digest = candidates.length || eventCandidates.length
+    ? await createDigest(candidates, yesterday, today, apiKey, model, timeZone, undefined, eventCandidates)
+    : { date: today, yesterday: [], today: [] };
+  log(`Gemini result: ${digest.yesterday.length} yesterday stories, ${digest.today.length} official events for today.`);
+  if (digest.today.length < MAX_TODAY_EVENTS) {
+    const found = await findTodayEventsViaSearch(today, timeZone, MAX_TODAY_EVENTS - digest.today.length, digest.today.map((event) => event.title), apiKey, model);
+    digest = { ...digest, today: uniqueStories([...digest.today, ...found]).slice(0, MAX_TODAY_EVENTS) };
+    log(`Today's events after web search: ${digest.today.length}.`);
+  }
+  return { ...base, digest: digest.yesterday.length || digest.today.length ? digest : null };
 }
