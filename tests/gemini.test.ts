@@ -99,6 +99,20 @@ test("web-search events are accepted only when grounded, dated today and linked"
   assert.deepEqual(await findTodayEventsViaSearch("2026-11-17", "Europe/Kyiv", 10, [], "key", undefined, make(false), 1), []);
 });
 
+test("web search moves to the next model when the first one is rate limited", async () => {
+  const used: string[] = [];
+  const client: Pick<GoogleGenAI["models"], "generateContent"> = {
+    generateContent: async (params) => {
+      used.push(String(params.model));
+      if (params.model !== "gemini-2.5-flash") throw new Error("Retryable HTTP Error: Too Many Requests");
+      return { text: JSON.stringify([{ title: "Премьера фильма", summary: "Мировая премьера.", category: "Кино", importance: 7, date: "2026-11-17", time: null, sourceUrl: "https://example.com/film" }]), candidates: [{ groundingMetadata: { groundingChunks: [{}] } }] } as unknown as Awaited<ReturnType<GoogleGenAI["models"]["generateContent"]>>;
+    },
+  };
+  const events = await findTodayEventsViaSearch("2026-11-17", "Europe/Kyiv", 10, [], "key", undefined, client, 1);
+  assert.deepEqual(used, ["gemini-3.5-flash-lite", "gemini-3.5-flash-lite", "gemini-2.5-flash"]);
+  assert.equal(events.length, 1);
+});
+
 test("removes repeated translated headlines and keeps the higher-ranked copy", () => {
   const articles: Article[] = [
     { title: "First report", description: "", url: "https://example.com/1", source: "BBC", publishedAt: "2026-11-10T12:00:00Z" },

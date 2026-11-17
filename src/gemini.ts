@@ -65,17 +65,19 @@ const FALLBACK_MODEL = "gemini-2.5-flash";
 function isTransientError(error: unknown): boolean {
   const status = (error as { status?: unknown })?.status;
   if (typeof status === "number") return [429, 500, 502, 503, 504].includes(status);
-  return /unavailable|overloaded|high demand|rate limit|resource exhausted|timed? ?out|fetch failed|\b(429|500|502|503|504)\b/i.test(error instanceof Error ? error.message : String(error));
+  return /unavailable|overloaded|high demand|rate limit|too many requests|quota|resource exhausted|timed? ?out|fetch failed|\b(429|500|502|503|504)\b/i.test(error instanceof Error ? error.message : String(error));
 }
 
-// Retries transient Gemini failures with growing pauses, then falls back to a second model.
+interface RetryOptions { fallbacks?: string[]; attemptsPerModel?: number; nextModelOnAnyError?: boolean }
+
+// Retries transient Gemini failures with growing pauses, then falls back to other models.
 async function generateWithRetry(
   models: Pick<GoogleGenAI["models"], "generateContent">,
   params: Parameters<GoogleGenAI["models"]["generateContent"]>[0],
   retryDelayMs: number,
+  { fallbacks = [FALLBACK_MODEL], attemptsPerModel = 4, nextModelOnAnyError = false }: RetryOptions = {},
 ) {
-  const candidates = [params.model, ...(params.model === FALLBACK_MODEL ? [] : [FALLBACK_MODEL])];
-  const attemptsPerModel = 4;
+  const candidates = [params.model, ...fallbacks].filter((model, index, all) => all.indexOf(model) === index);
   let lastError: unknown;
   for (const model of candidates) {
     for (let attempt = 0; attempt < attemptsPerModel; attempt++) {
@@ -84,8 +86,11 @@ async function generateWithRetry(
         return await models.generateContent({ ...params, model });
       } catch (error) {
         lastError = error;
-        if (!isTransientError(error)) throw error;
         console.warn(`Gemini ${model} attempt ${attempt + 1}/${attemptsPerModel} failed: ${error instanceof Error ? error.message : error}`);
+        if (!isTransientError(error)) {
+          if (nextModelOnAnyError) break;
+          throw error;
+        }
         if (attempt + 1 < attemptsPerModel) await new Promise((resolve) => setTimeout(resolve, retryDelayMs * 2 ** attempt));
       }
     }
@@ -187,9 +192,12 @@ export async function findTodayEventsViaSearch(
 ): Promise<PlannedEvent[]> {
   if (limit <= 0 || !apiKey) return [];
   const models = client ?? new GoogleGenAI({ apiKey, httpOptions: { retryOptions: { attempts: 1 } } }).models;
-  const prompt = `Today is ${todayDate} in ${timeZone}. Use Google Search to find the ${limit} most important scheduled world events that take place on exactly ${todayDate}: political summits, elections and votes, central bank decisions and key economic data releases, court rulings, major sports finals and matches, space launches, large tech or product presentations, international conferences.\nInclude only events that are officially announced for that date and not cancelled; never include events that already happened in the past, rumours or guesses.\nSkip events already covered: ${JSON.stringify(knownTitles)}.\nReturn ONLY a JSON array (no markdown, no commentary) of up to ${limit} objects: {"title": Russian title, "summary": 1-2 sentence Russian description, "category": one Russian word, "importance": integer 1..10, "date": "YYYY-MM-DD", "time": "HH:MM" in ${timeZone} or null if unknown, "sourceUrl": direct URL of the page that announces the event}. Return [] if nothing reliable is found.`;
+  const prompt = `Today is ${todayDate} in ${timeZone}. Use Google Search to find the ${limit} most important and most widely followed events that take place on exactly ${todayDate} anywhere in the world. Cover a broad mix: meetings, talks and visits of heads of state and politicians, summits, elections and parliamentary votes, central bank decisions and key economic data releases, court hearings and verdicts, major sports matches and finals, big film premieres and cinema releases, large concerts and festivals, award ceremonies, space launches, major tech or product presentations, international conferences.\nInclude only events that a reliable source says will happen on that date and that are not cancelled; never include things that already happened earlier, rumours or guesses.\nSkip events already covered: ${JSON.stringify(knownTitles)}.\nReturn ONLY a JSON array (no markdown, no commentary) of up to ${limit} objects ordered by importance: {"title": Russian title, "summary": 1-2 sentence Russian description, "category": one Russian word, "importance": integer 1..10, "date": "YYYY-MM-DD", "time": "HH:MM" in ${timeZone} or null if unknown, "sourceUrl": direct URL of the page that announces the event}. Return [] only if nothing reliable is found.`;
   try {
-    const response = await generateWithRetry(models, { model, contents: prompt, config: { tools: [{ googleSearch: {} }], temperature: 0.1 } }, retryDelayMs);
+    const response = await generateWithRetry(
+      models, { model, contents: prompt, config: { tools: [{ googleSearch: {} }], temperature: 0.1 } }, retryDelayMs,
+      { fallbacks: [FALLBACK_MODEL, "gemini-3.5-flash"], attemptsPerModel: 2, nextModelOnAnyError: true },
+    );
     const grounded = (response.candidates?.[0]?.groundingMetadata?.groundingChunks?.length ?? 0) > 0;
     if (!grounded || !response.text) {
       console.warn("Gemini search returned no grounded answer; skipping web-found events.");
